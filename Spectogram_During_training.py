@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from torchvision import datasets, transforms
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.signal import spectrogram
 
 # Define the DeepConvAutoencoder class
 class DeepConvAutoencoder(nn.Module):
@@ -55,14 +56,16 @@ n_epochs = 10
 
 # List to store spectrograms at different epochs
 spectrograms = []
+reconstruction_losses = []
 
 # Training loop
 for epoch in range(n_epochs):
     print(f"Epoch {epoch+1}/{n_epochs}")
     running_loss = 0.0
+    reconstruction_loss = 0.0
     
     # Train the model
-    for images, _ in train_loader:
+    for batch_idx, (images, _) in enumerate(train_loader):
         optimizer.zero_grad()
         outputs = deep_autoencoder(images)
         
@@ -73,30 +76,50 @@ for epoch in range(n_epochs):
         loss.backward()
         optimizer.step()
         running_loss += loss.item() * images.size(0)
-    
-    # Compute the spectrogram of the latent space batch by batch
-    with torch.no_grad():
-        batch_spectrograms = []
-        for images, _ in train_loader:
-            latent_space = deep_autoencoder.conv3(deep_autoencoder.conv2(deep_autoencoder.conv1(images)))
-            spectrogram = np.abs(np.fft.fftn(latent_space.numpy(), axes=(-2, -1)))**2
-            batch_spectrogram = np.mean(spectrogram, axis=0)
-            batch_spectrograms.append(batch_spectrogram)
-        spectrogram = np.mean(batch_spectrograms, axis=0)
-        spectrograms.append(spectrogram)
-    
-    # Print the average loss for the epoch
-    epoch_loss = running_loss / len(train_dataset)
-    print(f"Epoch Loss: {epoch_loss:.4f}")
+        reconstruction_loss += loss.item()
 
-# Plot spectrograms at different epochs
-plt.figure(figsize=(12, 8))
-for i, spectrogram in enumerate(spectrograms):
-    plt.subplot(3, 4, i+1)
-    plt.imshow(spectrogram, aspect='auto', cmap='viridis', origin='lower')
-    plt.xlabel('Frequency')
-    plt.ylabel('Image Index')
-    plt.title(f'Epoch {i+1}')
-    plt.colorbar(label='Power')
-plt.tight_layout()
+        # Compute the spectrogram of the latent space for this batch
+        with torch.no_grad():
+            latent_space = deep_autoencoder.conv3(deep_autoencoder.conv2(deep_autoencoder.conv1(images)))
+            # Reshape the latent space to (batch_size, channels, height, width)
+            latent_space = latent_space.permute(0, 2, 3, 1)
+            # Compute spectrogram
+            freqs, times, Sxx = spectrogram(latent_space.numpy(), axis=-1)
+            batch_spectrogram = np.mean(Sxx, axis=0)  # Average over batch
+            spectrograms.append(batch_spectrogram)
+    
+    # Compute the average reconstruction loss for the epoch
+    epoch_loss = running_loss / len(train_dataset)
+    #avg_reconstruction_loss = reconstruction_loss / len(train_loader)
+    print(f"Epoch Loss: {epoch_loss:.4f}")
+    #reconstruction_losses.append(avg_reconstruction_loss)
+
+
+
+# Save spectrograms
+np.save('spectrograms.npy', np.array(spectrograms))
+
+# Load the spectrogram data from the npy file
+spectrogram_data = np.load('spectrograms.npy')
+
+# Convert the numpy array to a PyTorch tensor
+spectrogram_tensor = torch.tensor(spectrogram_data)
+
+
+
+
+
+# Assuming mean_image is your PyTorch tensor
+mean_image = torch.mean(spectrogram_tensor, dim=-1)  # Taking mean along the last dimension
+
+# Reshape mean_image to a 2D array
+mean_image_flat = mean_image.reshape(mean_image.shape[0], -1)
+
+# Plot the mean spectrogram
+plt.figure(figsize=(8, 6))
+plt.imshow(mean_image_flat, aspect='auto', cmap='viridis', origin='lower')
+plt.xlabel('Time')
+plt.ylabel('Frequency')
+plt.title('Mean Spectrogram')
+plt.colorbar(label='Power')
 plt.show()
